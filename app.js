@@ -8,7 +8,7 @@ const DEFAULT_DATA = {
       surname: "Name",
       birthSurname: "",
       gender: "unknown",
-      color: "#4f8f72",
+      color: "",
       birthDate: "",
       deathDate: "",
       birthPlace: "",
@@ -50,6 +50,10 @@ function bindElements() {
     "selectedName",
     "selectedMeta",
     "personForm",
+    "existingPersonSelect",
+    "connectPartnerBtn",
+    "connectParentBtn",
+    "connectChildBtn",
     "deletePersonBtn",
     "searchInput",
     "searchResults",
@@ -73,10 +77,14 @@ function bindEvents() {
 
   els.personForm.addEventListener("input", handleFormInput);
 
-  document.querySelectorAll(".relationship-actions button").forEach((button) => {
+  document.querySelectorAll(".relationship-actions button[data-action]").forEach((button) => {
     button.addEventListener("click", () => addRelative(button.dataset.action));
   });
 
+  els.existingPersonSelect.addEventListener("change", updateExistingRelationshipButtons);
+  els.connectPartnerBtn.addEventListener("click", () => connectExistingPerson("partner"));
+  els.connectParentBtn.addEventListener("click", () => connectExistingPerson("parent"));
+  els.connectChildBtn.addEventListener("click", () => connectExistingPerson("child"));
   els.deletePersonBtn.addEventListener("click", deleteSelectedPerson);
   els.newTreeBtn.addEventListener("click", newTree);
   els.exportBtn.addEventListener("click", exportJson);
@@ -132,7 +140,7 @@ function normalizeState(data) {
       surname: person.surname || "",
       birthSurname: person.birthSurname || "",
       gender: person.gender || "unknown",
-      color: person.color || colorForGender(person.gender),
+      color: "",
       birthDate: person.birthDate || "",
       deathDate: person.deathDate || "",
       birthPlace: person.birthPlace || "",
@@ -169,6 +177,7 @@ function markDirty() {
 
 function render() {
   renderEditor();
+  renderExistingPersonOptions();
   renderTree();
   renderSearch();
 }
@@ -180,7 +189,7 @@ function renderEditor() {
   els.selectedName.textContent = displayName(person);
   els.selectedMeta.textContent = metaLine(person) || "Add details to begin.";
   els.avatarFallback.textContent = initials(person);
-  els.avatarFallback.style.background = person.color || colorForGender(person.gender);
+  els.avatarFallback.style.background = colorForPerson(person);
 
   if (person.photo) {
     els.photoPreview.src = person.photo;
@@ -197,6 +206,25 @@ function renderEditor() {
       field.value = person[field.name];
     }
   });
+}
+
+function renderExistingPersonOptions() {
+  const selected = selectedPerson();
+  const options = Object.values(state.people)
+    .filter((person) => person.id !== selected?.id)
+    .sort((a, b) => displayName(a).localeCompare(displayName(b)));
+
+  const currentValue = els.existingPersonSelect.value;
+  els.existingPersonSelect.innerHTML = options.length
+    ? options
+        .map((person) => `<option value="${escapeAttribute(person.id)}">${escapeHtml(displayName(person))}</option>`)
+        .join("")
+    : `<option value="">No other people yet</option>`;
+
+  if (options.some((person) => person.id === currentValue)) {
+    els.existingPersonSelect.value = currentValue;
+  }
+  updateExistingRelationshipButtons();
 }
 
 function renderTree() {
@@ -477,10 +505,10 @@ function renderPersonCard(node) {
   button.classList.toggle("selected", person.id === state.selectedId);
   button.style.left = `${node.x}px`;
   button.style.top = `${node.y}px`;
-  button.style.setProperty("--person-color", person.color || colorForGender(person.gender));
+  button.style.setProperty("--person-color", colorForPerson(person));
   button.type = "button";
   button.innerHTML = `
-    <span class="mini-avatar" style="background:${escapeHtml(person.color || colorForGender(person.gender))}">
+    <span class="mini-avatar" style="background:${escapeHtml(colorForPerson(person))}">
       ${person.photo ? `<img src="${escapeAttribute(person.photo)}" alt="">` : escapeHtml(initials(person))}
     </span>
     <span>
@@ -546,6 +574,9 @@ function handleFormInput(event) {
   const person = selectedPerson();
   if (!person || !event.target.name) return;
   person[event.target.name] = event.target.value;
+  if (event.target.name === "gender") {
+    person.color = "";
+  }
   markDirty();
   renderEditor();
   renderTree();
@@ -558,6 +589,14 @@ function addRelative(action) {
   const id = createPerson({ givenName: "New", surname: relationshipLabel(action), gender: "unknown" });
   const relative = state.people[id];
 
+  if (action === "add-person") {
+    state.selectedId = id;
+    state.focusId = id;
+    markDirty();
+    render();
+    centerSelected();
+    return;
+  }
   if (action === "add-parent") {
     connectParentChild(relative.id, person.id);
   }
@@ -586,6 +625,7 @@ function addRelative(action) {
 
 function relationshipLabel(action) {
   return {
+    "add-person": "Person",
     "add-parent": "Parent",
     "add-child": "Child",
     "add-partner": "Partner",
@@ -601,7 +641,7 @@ function createPerson(overrides = {}) {
     surname: "",
     birthSurname: "",
     gender: "unknown",
-    color: colorForGender("unknown"),
+    color: "",
     birthDate: "",
     deathDate: "",
     birthPlace: "",
@@ -615,14 +655,47 @@ function createPerson(overrides = {}) {
     children: [],
     ...overrides
   };
-  state.people[id].color = state.people[id].color || colorForGender(state.people[id].gender);
   return id;
+}
+
+function connectExistingPerson(kind) {
+  const person = selectedPerson();
+  const target = state.people[els.existingPersonSelect.value];
+  if (!person || !target || person.id === target.id) return;
+
+  if (kind === "partner") {
+    connectPartners(person.id, target.id);
+    showToast(`${displayName(target)} is now a partner of ${displayName(person)}.`);
+  }
+  if (kind === "parent") {
+    connectParentChild(target.id, person.id);
+    showToast(`${displayName(target)} is now a parent of ${displayName(person)}.`);
+  }
+  if (kind === "child") {
+    connectParentChild(person.id, target.id);
+    person.partners.forEach((partnerId) => connectParentChild(partnerId, target.id));
+    showToast(`${displayName(target)} is now a child of ${displayName(person)}.`);
+  }
+
+  state.focusId = person.id;
+  markDirty();
+  render();
+  centerSelected();
+}
+
+function updateExistingRelationshipButtons() {
+  const selected = selectedPerson();
+  const target = state.people[els.existingPersonSelect.value];
+  const hasTarget = Boolean(selected && target && selected.id !== target.id);
+  els.connectPartnerBtn.disabled = !hasTarget || selected.partners.includes(target.id);
+  els.connectParentBtn.disabled = !hasTarget || selected.parents.includes(target.id) || wouldCreateParentCycle(target.id, selected.id);
+  els.connectChildBtn.disabled = !hasTarget || selected.children.includes(target.id) || wouldCreateParentCycle(selected.id, target.id);
 }
 
 function connectParentChild(parentId, childId) {
   const parent = state.people[parentId];
   const child = state.people[childId];
-  if (!parent || !child || parentId === childId) return;
+  if (!parent || !child || parentId === childId || wouldCreateParentCycle(parentId, childId)) return;
   parent.children = uniqueIds([...parent.children, childId]);
   child.parents = uniqueIds([...child.parents, parentId]);
 }
@@ -690,10 +763,31 @@ function relationshipCount(person) {
 }
 
 function colorForGender(gender) {
-  if (gender === "female") return "#b65c71";
-  if (gender === "male") return "#537ea6";
+  if (gender === "female") return "#e46f9b";
+  if (gender === "male") return "#3d8bff";
   if (gender === "other") return "#c28b32";
-  return "#4f8f72";
+  return "#6f7d76";
+}
+
+function colorForPerson(person) {
+  return colorForGender(person.gender);
+}
+
+function wouldCreateParentCycle(parentId, childId) {
+  if (parentId === childId) return true;
+  const stack = [childId];
+  const seen = new Set();
+
+  while (stack.length) {
+    const id = stack.pop();
+    if (id === parentId) return true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const person = state.people[id];
+    if (person) stack.push(...person.children);
+  }
+
+  return false;
 }
 
 function uniqueIds(ids) {

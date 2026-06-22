@@ -68,10 +68,6 @@
                     <option value="unknown">Unknown</option>
                   </select>
                 </label>
-                <label>
-                  Color
-                  <input name="color" type="color" value="#4f8f72">
-                </label>
               </div>
               <label>
                 Photo URL
@@ -117,10 +113,24 @@
           </form>
 
           <section class="relationship-actions" aria-label="Add relatives">
+            <button data-action="add-person">+ Person</button>
             <button data-action="add-parent">+ Parent</button>
             <button data-action="add-partner">+ Partner</button>
             <button data-action="add-child">+ Child</button>
             <button data-action="add-sibling">+ Sibling</button>
+          </section>
+
+          <section class="existing-relationship" aria-label="Connect existing people">
+            <p class="section-label">Connect existing person</p>
+            <label>
+              Person
+              <select id="existingPersonSelect"></select>
+            </label>
+            <div class="relationship-actions compact">
+              <button id="connectPartnerBtn" type="button">Partner</button>
+              <button id="connectParentBtn" type="button">Parent</button>
+              <button id="connectChildBtn" type="button">Child</button>
+            </div>
           </section>
 
           <section class="danger-zone">
