@@ -302,6 +302,67 @@ input[type="color"] {
   gap: 10px;
 }
 
+.relationship-list {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+}
+
+.relationship-list > div {
+  display: grid;
+  gap: 8px;
+}
+
+.relationship-row {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 1fr 34px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 8px 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7faf7;
+}
+
+.relationship-row span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.relationship-row strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.relationship-row button {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: #f4dde2;
+  color: #8b3045;
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.relationship-row button:hover {
+  background: #edc9d2;
+}
+
+.empty-copy {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .section-label {
   color: var(--accent-strong);
   font-size: 12px;

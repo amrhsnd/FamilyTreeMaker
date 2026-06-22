@@ -54,6 +54,7 @@ function bindElements() {
     "connectPartnerBtn",
     "connectParentBtn",
     "connectChildBtn",
+    "relationshipList",
     "deletePersonBtn",
     "searchInput",
     "searchResults",
@@ -178,6 +179,7 @@ function markDirty() {
 function render() {
   renderEditor();
   renderExistingPersonOptions();
+  renderRelationshipList();
   renderTree();
   renderSearch();
 }
@@ -302,9 +304,9 @@ function buildLayout() {
   const nodeMap = new Map();
   const nodes = [];
   const cardWidth = 178;
-  const levelGap = 170;
-  const partnerGap = 18;
-  const groupGap = 78;
+  const levelGap = 145;
+  const partnerGap = 12;
+  const groupGap = 36;
   const leftPad = 110;
   const startY = 90 + Math.abs(Math.min(...levelKeys, 0)) * levelGap;
   const previousCenters = new Map();
@@ -526,6 +528,39 @@ function renderPersonCard(node) {
   els.treeCanvas.appendChild(button);
 }
 
+function renderRelationshipList() {
+  const person = selectedPerson();
+  if (!person) {
+    els.relationshipList.innerHTML = "";
+    return;
+  }
+
+  const rows = [
+    ...person.parents.map((id) => relationshipRow("Parent", id, "parent")),
+    ...person.partners.map((id) => relationshipRow("Partner", id, "partner")),
+    ...person.children.map((id) => relationshipRow("Child", id, "child"))
+  ].filter(Boolean);
+
+  els.relationshipList.innerHTML = rows.length ? rows.join("") : `<p class="empty-copy">No relationships yet.</p>`;
+  els.relationshipList.querySelectorAll("button[data-remove-relationship]").forEach((button) => {
+    button.addEventListener("click", () => removeRelationship(button.dataset.removeRelationship, button.dataset.personId));
+  });
+}
+
+function relationshipRow(label, relatedId, kind) {
+  const related = state.people[relatedId];
+  if (!related) return "";
+  return `
+    <div class="relationship-row">
+      <div>
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(displayName(related))}</strong>
+      </div>
+      <button type="button" data-remove-relationship="${escapeAttribute(kind)}" data-person-id="${escapeAttribute(relatedId)}" title="Remove relationship" aria-label="Remove ${escapeAttribute(label.toLowerCase())} relationship">&times;</button>
+    </div>
+  `;
+}
+
 function drawLink(from, to, type) {
   const startX = from.x + 89;
   const startY = from.y + 84;
@@ -683,6 +718,27 @@ function connectExistingPerson(kind) {
   centerSelected();
 }
 
+function removeRelationship(kind, relatedId) {
+  const person = selectedPerson();
+  const related = state.people[relatedId];
+  if (!person || !related) return;
+
+  if (kind === "parent") {
+    disconnectParentChild(related.id, person.id);
+  }
+  if (kind === "child") {
+    disconnectParentChild(person.id, related.id);
+  }
+  if (kind === "partner") {
+    disconnectPartners(person.id, related.id);
+  }
+
+  markDirty();
+  render();
+  centerSelected();
+  showToast(`Removed relationship with ${displayName(related)}.`);
+}
+
 function updateExistingRelationshipButtons() {
   const selected = selectedPerson();
   const target = state.people[els.existingPersonSelect.value];
@@ -700,12 +756,28 @@ function connectParentChild(parentId, childId) {
   child.parents = uniqueIds([...child.parents, parentId]);
 }
 
+function disconnectParentChild(parentId, childId) {
+  const parent = state.people[parentId];
+  const child = state.people[childId];
+  if (!parent || !child) return;
+  parent.children = parent.children.filter((id) => id !== childId);
+  child.parents = child.parents.filter((id) => id !== parentId);
+}
+
 function connectPartners(aId, bId) {
   const a = state.people[aId];
   const b = state.people[bId];
   if (!a || !b || aId === bId) return;
   a.partners = uniqueIds([...a.partners, bId]);
   b.partners = uniqueIds([...b.partners, aId]);
+}
+
+function disconnectPartners(aId, bId) {
+  const a = state.people[aId];
+  const b = state.people[bId];
+  if (!a || !b) return;
+  a.partners = a.partners.filter((id) => id !== bId);
+  b.partners = b.partners.filter((id) => id !== aId);
 }
 
 function deleteSelectedPerson() {
