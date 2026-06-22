@@ -257,7 +257,7 @@ function renderTree() {
   els.relationshipLines.style.transform = `scale(${state.zoom})`;
   els.relationshipLines.style.transformOrigin = "top left";
 
-  layout.links.forEach((link) => drawLink(link.from, link.to, link.type));
+  layout.links.forEach(drawParentLink);
   layout.partnerLinks.forEach((link) => drawPartnerLink(link.from, link.to));
   layout.nodes.forEach(renderPersonCard);
 }
@@ -304,87 +304,65 @@ function buildLayout() {
   const nodeMap = new Map();
   const nodes = [];
   const cardWidth = 178;
-  const levelGap = 145;
-  const partnerGap = 12;
-  const groupGap = 36;
+  const cardMidX = cardWidth / 2;
+  const cardHeight = 84;
+  const levelGap = 132;
+  const partnerGap = 10;
+  const groupGap = 30;
   const leftPad = 110;
   const startY = 90 + Math.abs(Math.min(...levelKeys, 0)) * levelGap;
-  const previousCenters = new Map();
 
   levelKeys.forEach((level) => {
-    const groups = buildGenerationGroups(levels.get(level), generationById);
-    groups.sort((a, b) => groupSortValue(a, previousCenters) - groupSortValue(b, previousCenters));
+    const groups = buildGenerationGroups(levels.get(level), generationById).map((ids) => ({
+      ids,
+      level,
+      width: ids.length * cardWidth + (ids.length - 1) * partnerGap,
+      x: 0,
+      center: 0
+    }));
+
+    groups.sort((a, b) => groupSortValue(a.ids, nodeMap) - groupSortValue(b.ids, nodeMap));
 
     let cursor = leftPad;
     const y = startY + level * levelGap;
     groups.forEach((group) => {
-      const groupWidth = group.length * cardWidth + (group.length - 1) * partnerGap;
-      group.forEach((id, index) => {
+      const preferredCenter = preferredFamilyCenter(group.ids, nodeMap, cardMidX);
+      const preferredX = preferredCenter === null ? cursor : preferredCenter - group.width / 2;
+      group.x = Math.max(cursor, preferredX);
+      group.center = group.x + group.width / 2;
+
+      group.ids.forEach((id, index) => {
         const node = {
           id,
           person: state.people[id],
-          x: cursor + index * (cardWidth + partnerGap),
+          x: group.x + index * (cardWidth + partnerGap),
           y
         };
         nodeMap.set(id, node);
         nodes.push(node);
       });
-      const center = cursor + groupWidth / 2;
-      group.forEach((id) => previousCenters.set(id, center));
-      cursor += groupWidth + groupGap;
+      cursor = group.x + group.width + groupGap;
     });
   });
 
-  const rowsByLevel = new Map();
+  const bounds = layoutBounds(nodes);
+  const layoutWidth = bounds.maxX + cardWidth - Math.min(...nodes.map((node) => node.x));
+  const globalOffset = Math.max(leftPad - Math.min(...nodes.map((node) => node.x)), (980 - layoutWidth) / 2);
   nodes.forEach((node) => {
-    const level = generationById.get(node.id);
-    if (!rowsByLevel.has(level)) rowsByLevel.set(level, []);
-    rowsByLevel.get(level).push(node);
-  });
-
-  rowsByLevel.forEach((rowNodes) => {
-    const rowMinX = Math.min(...rowNodes.map((node) => node.x));
-    const rowMaxX = Math.max(...rowNodes.map((node) => node.x + cardWidth));
-    const rowWidth = rowMaxX - rowMinX;
-    const offset = Math.max(0, (980 - rowWidth) / 2 - rowMinX);
-    rowNodes.forEach((node) => {
-      node.x += offset;
-    });
-  });
-
-  const childParentCenters = new Map();
-  nodes.forEach((node) => {
-    const visibleParents = node.person.parents.map((id) => nodeMap.get(id)).filter(Boolean);
-    if (visibleParents.length) {
-      childParentCenters.set(
-        node.id,
-        visibleParents.reduce((sum, parent) => sum + parent.x + cardWidth / 2, 0) / visibleParents.length
-      );
-    }
-  });
-
-  rowsByLevel.forEach((rowNodes) => {
-    rowNodes
-      .filter((node) => childParentCenters.has(node.id) && !hasVisiblePartner(node, generationById, nodeMap))
-      .forEach((node) => {
-        const targetX = childParentCenters.get(node.id) - cardWidth / 2;
-        const collision = rowNodes.some((other) => {
-          if (other.id === node.id) return false;
-          return Math.abs(targetX - other.x) < cardWidth + partnerGap;
-        });
-        if (!collision) {
-          node.x = Math.max(leftPad, targetX);
-        }
-      });
+    node.x += globalOffset;
   });
 
   const links = [];
   const partnerLinks = [];
+  const linkedChildren = new Set();
   nodes.forEach((node) => {
-    node.person.children.forEach((childId) => {
-      const child = nodeMap.get(childId);
-      if (child) links.push({ from: node, to: child, type: "parent" });
-    });
+    const visibleParents = node.person.parents.map((id) => nodeMap.get(id)).filter(Boolean);
+    if (visibleParents.length && !linkedChildren.has(node.id)) {
+      const parentCenterX = visibleParents.reduce((sum, parent) => sum + parent.x + cardMidX, 0) / visibleParents.length;
+      const parentBottomY = Math.max(...visibleParents.map((parent) => parent.y + cardHeight));
+      links.push({ fromX: parentCenterX, fromY: parentBottomY, to: node });
+      linkedChildren.add(node.id);
+    }
     node.person.partners.forEach((partnerId) => {
       const partner = nodeMap.get(partnerId);
       if (partner && node.id < partner.id) {
@@ -394,12 +372,6 @@ function buildLayout() {
   });
 
   return { nodes, links, partnerLinks };
-}
-
-function hasVisiblePartner(node, generationById, nodeMap) {
-  return node.person.partners.some((partnerId) => {
-    return nodeMap.has(partnerId) && generationById.get(partnerId) === generationById.get(node.id);
-  });
 }
 
 function assignGenerations(focusId, maxAncestorDepth, maxDescendantDepth) {
@@ -479,9 +451,12 @@ function orderPartnerGroup(group) {
   return ordered;
 }
 
-function groupSortValue(group, previousCenters) {
+function groupSortValue(group, nodeMap) {
   const parentCenters = group.flatMap((id) => {
-    return state.people[id].parents.map((parentId) => previousCenters.get(parentId)).filter((value) => value !== undefined);
+    return state.people[id].parents
+      .map((parentId) => nodeMap.get(parentId))
+      .filter(Boolean)
+      .map((parent) => parent.x + 89);
   });
   if (parentCenters.length) {
     return parentCenters.reduce((sum, value) => sum + value, 0) / parentCenters.length;
@@ -489,6 +464,17 @@ function groupSortValue(group, previousCenters) {
   if (group.includes(state.focusId)) return -2;
   if (group.includes(state.selectedId)) return -1;
   return group.map((id) => displayName(state.people[id]).toLowerCase()).sort()[0].charCodeAt(0) || 0;
+}
+
+function preferredFamilyCenter(group, nodeMap, cardMidX) {
+  const parentCenters = group.flatMap((id) => {
+    return state.people[id].parents
+      .map((parentId) => nodeMap.get(parentId))
+      .filter(Boolean)
+      .map((parent) => parent.x + cardMidX);
+  });
+  if (!parentCenters.length) return null;
+  return parentCenters.reduce((sum, value) => sum + value, 0) / parentCenters.length;
 }
 
 function nextOpenGeneration(generationById) {
@@ -561,16 +547,16 @@ function relationshipRow(label, relatedId, kind) {
   `;
 }
 
-function drawLink(from, to, type) {
-  const startX = from.x + 89;
-  const startY = from.y + 84;
-  const endX = to.x + 89;
-  const endY = to.y;
+function drawParentLink(link) {
+  const startX = link.fromX;
+  const startY = link.fromY;
+  const endX = link.to.x + 89;
+  const endY = link.to.y;
   const midY = startY + (endY - startY) / 2;
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("d", `M ${startX} ${startY} C ${startX} ${midY}, ${endX} ${midY}, ${endX} ${endY}`);
   path.setAttribute("fill", "none");
-  path.setAttribute("stroke", type === "parent" ? "#8f8069" : "#a9945e");
+  path.setAttribute("stroke", "#8f8069");
   path.setAttribute("stroke-width", "2.5");
   path.setAttribute("stroke-linecap", "round");
   els.relationshipLines.appendChild(path);
