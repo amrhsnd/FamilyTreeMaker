@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Family Tree Maker</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="mark" aria-hidden="true">⌂</div>
+          <div>
+            <h1>Family Tree Maker</h1>
+            <p id="saveStatus">Saved locally</p>
+          </div>
+        </div>
+        <div class="top-actions" aria-label="Tree actions">
+          <button class="icon-button" id="newTreeBtn" title="Start a new tree" aria-label="Start a new tree">✦</button>
+          <button class="icon-button" id="importBtn" title="Import JSON or GEDCOM" aria-label="Import JSON or GEDCOM">⇪</button>
+          <button class="icon-button" id="exportBtn" title="Download JSON" aria-label="Download JSON">⇩</button>
+          <button class="icon-button" id="printBtn" title="Print tree" aria-label="Print tree">⎙</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="editor-panel" aria-label="Person editor">
+          <section class="person-header">
+            <div class="avatar-wrap">
+              <img id="photoPreview" alt="" class="avatar hidden">
+              <div id="avatarFallback" class="avatar-fallback" aria-hidden="true">?</div>
+            </div>
+            <div>
+              <p class="eyebrow">Selected person</p>
+              <h2 id="selectedName">New person</h2>
+              <p id="selectedMeta" class="muted">Add details to begin.</p>
+            </div>
+          </section>
+
+          <div class="tabs" role="tablist" aria-label="Editor sections">
+            <button class="tab active" data-tab="personal" role="tab" aria-selected="true">Personal</button>
+            <button class="tab" data-tab="life" role="tab" aria-selected="false">Life</button>
+            <button class="tab" data-tab="notes" role="tab" aria-selected="false">Notes</button>
+          </div>
+
+          <form id="personForm" autocomplete="off">
+            <section class="tab-panel active" data-panel="personal">
+              <label>
+                Given names
+                <input name="givenName" placeholder="Jane">
+              </label>
+              <label>
+                Surname
+                <input name="surname" placeholder="Rivera">
+              </label>
+              <label>
+                Birth surname
+                <input name="birthSurname" placeholder="Optional">
+              </label>
+              <div class="field-grid">
+                <label>
+                  Gender
+                  <select name="gender">
+                    <option value="female">Female</option>
+                    <option value="male">Male</option>
+                    <option value="other">Other</option>
+                    <option value="unknown">Unknown</option>
+                  </select>
+                </label>
+                <label>
+                  Color
+                  <input name="color" type="color" value="#4f8f72">
+                </label>
+              </div>
+              <label>
+                Photo URL
+                <input name="photo" placeholder="https://...">
+              </label>
+            </section>
+
+            <section class="tab-panel" data-panel="life">
+              <div class="field-grid">
+                <label>
+                  Birth date
+                  <input name="birthDate" placeholder="1982-04-18">
+                </label>
+                <label>
+                  Death date
+                  <input name="deathDate" placeholder="">
+                </label>
+              </div>
+              <label>
+                Birth place
+                <input name="birthPlace" placeholder="City, country">
+              </label>
+              <label>
+                Profession
+                <input name="profession" placeholder="Teacher">
+              </label>
+              <label>
+                Email
+                <input name="email" type="email" placeholder="name@example.com">
+              </label>
+              <label>
+                Phone
+                <input name="phone" placeholder="+1 ...">
+              </label>
+            </section>
+
+            <section class="tab-panel" data-panel="notes">
+              <label>
+                Biography
+                <textarea name="bio" rows="7" placeholder="Stories, memories, sources, or research notes"></textarea>
+              </label>
+            </section>
+          </form>
+
+          <section class="relationship-actions" aria-label="Add relatives">
+            <button data-action="add-parent">+ Parent</button>
+            <button data-action="add-partner">+ Partner</button>
+            <button data-action="add-child">+ Child</button>
+            <button data-action="add-sibling">+ Sibling</button>
+          </section>
+
+          <section class="danger-zone">
+            <button id="deletePersonBtn">Delete selected person</button>
+          </section>
+        </aside>
+
+        <section class="tree-area" aria-label="Family tree">
+          <div class="tree-toolbar">
+            <div class="search-wrap">
+              <span aria-hidden="true">⌕</span>
+              <input id="searchInput" placeholder="Find a person" aria-label="Find a person">
+              <div id="searchResults" class="search-results hidden"></div>
+            </div>
+            <div class="toolbar-group">
+              <button class="icon-button" id="zoomOutBtn" title="Zoom out" aria-label="Zoom out">−</button>
+              <button class="icon-button" id="zoomResetBtn" title="Reset zoom" aria-label="Reset zoom">◇</button>
+              <button class="icon-button" id="zoomInBtn" title="Zoom in" aria-label="Zoom in">+</button>
+            </div>
+            <div class="toolbar-group segmented" aria-label="Tree depth">
+              <button data-depth="compact" class="active">Compact</button>
+              <button data-depth="full">Full</button>
+            </div>
+          </div>
+
+          <div id="treeViewport" class="tree-viewport">
+            <svg id="relationshipLines" class="relationship-lines" aria-hidden="true"></svg>
+            <div id="treeCanvas" class="tree-canvas"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <input id="fileInput" type="file" accept=".json,.ged,.gedcom,.txt" hidden>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
