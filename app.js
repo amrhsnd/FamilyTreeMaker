@@ -306,9 +306,9 @@ function buildLayout() {
   const cardWidth = 178;
   const cardMidX = cardWidth / 2;
   const cardHeight = 84;
-  const levelGap = 132;
-  const partnerGap = 10;
-  const groupGap = 30;
+  const levelGap = 175;
+  const partnerGap = 18;
+  const groupGap = 120;
   const leftPad = 110;
   const startY = 90 + Math.abs(Math.min(...levelKeys, 0)) * levelGap;
 
@@ -317,20 +317,17 @@ function buildLayout() {
       ids,
       level,
       width: ids.length * cardWidth + (ids.length - 1) * partnerGap,
+      preferredCenter: null,
       x: 0,
       center: 0
     }));
 
     groups.sort((a, b) => groupSortValue(a.ids, nodeMap) - groupSortValue(b.ids, nodeMap));
 
-    let cursor = leftPad;
     const y = startY + level * levelGap;
-    groups.forEach((group) => {
-      const preferredCenter = preferredFamilyCenter(group.ids, nodeMap, cardMidX);
-      const preferredX = preferredCenter === null ? cursor : preferredCenter - group.width / 2;
-      group.x = Math.max(cursor, preferredX);
-      group.center = group.x + group.width / 2;
+    placeGenerationGroups(groups, nodeMap, cardMidX, cardWidth, groupGap, leftPad);
 
+    groups.forEach((group) => {
       group.ids.forEach((id, index) => {
         const node = {
           id,
@@ -341,7 +338,6 @@ function buildLayout() {
         nodeMap.set(id, node);
         nodes.push(node);
       });
-      cursor = group.x + group.width + groupGap;
     });
   });
 
@@ -429,7 +425,39 @@ function buildGenerationGroups(ids, generationById) {
     groups.push(orderPartnerGroup(group));
   });
 
-  return groups;
+  return mergeSiblingGroups(groups);
+}
+
+function mergeSiblingGroups(groups) {
+  const merged = [];
+  const byParentKey = new Map();
+
+  groups.forEach((group) => {
+    const key = parentKeyForGroup(group);
+    if (!key) {
+      merged.push(group);
+      return;
+    }
+    if (!byParentKey.has(key)) {
+      const siblingGroup = [];
+      byParentKey.set(key, siblingGroup);
+      merged.push(siblingGroup);
+    }
+    byParentKey.get(key).push(...group);
+  });
+
+  return merged.map((group) => orderPartnerGroup(uniqueIds(group)));
+}
+
+function parentKeyForGroup(group) {
+  const keys = uniqueIds(
+    group
+      .map((id) => state.people[id])
+      .filter(Boolean)
+      .map((person) => person.parents.slice().sort().join("|"))
+      .filter(Boolean)
+  );
+  return keys.length === 1 ? keys[0] : "";
 }
 
 function orderPartnerGroup(group) {
@@ -464,6 +492,68 @@ function groupSortValue(group, nodeMap) {
   if (group.includes(state.focusId)) return -2;
   if (group.includes(state.selectedId)) return -1;
   return group.map((id) => displayName(state.people[id]).toLowerCase()).sort()[0].charCodeAt(0) || 0;
+}
+
+function placeGenerationGroups(groups, nodeMap, cardMidX, cardWidth, groupGap, leftPad) {
+  let fallbackCenter = leftPad + cardWidth / 2;
+  groups.forEach((group) => {
+    group.preferredCenter = preferredFamilyCenter(group.ids, nodeMap, cardMidX);
+    if (group.preferredCenter === null) {
+      group.preferredCenter = fallbackCenter + group.width / 2 - cardWidth / 2;
+      fallbackCenter = group.preferredCenter + group.width / 2 + groupGap;
+    }
+    group.x = group.preferredCenter - group.width / 2;
+    group.center = group.preferredCenter;
+  });
+
+  resolveGroupOverlaps(groups, groupGap);
+
+  const minX = Math.min(...groups.map((group) => group.x));
+  if (minX < leftPad) {
+    shiftGroups(groups, leftPad - minX);
+  }
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    pullGroupsTowardPreferredCenters(groups, groupGap);
+    resolveGroupOverlaps(groups, groupGap);
+  }
+}
+
+function resolveGroupOverlaps(groups, groupGap) {
+  groups.sort((a, b) => a.x - b.x);
+  for (let index = 1; index < groups.length; index += 1) {
+    const previous = groups[index - 1];
+    const group = groups[index];
+    const minX = previous.x + previous.width + groupGap;
+    if (group.x < minX) {
+      group.x = minX;
+      group.center = group.x + group.width / 2;
+    }
+  }
+}
+
+function pullGroupsTowardPreferredCenters(groups, groupGap) {
+  groups.forEach((group, index) => {
+    const preferredX = group.preferredCenter - group.width / 2;
+    let minX = -Infinity;
+    let maxX = Infinity;
+    if (groups[index - 1]) {
+      minX = groups[index - 1].x + groups[index - 1].width + groupGap;
+    }
+    if (groups[index + 1]) {
+      maxX = groups[index + 1].x - group.width - groupGap;
+    }
+    group.x = Math.min(maxX, Math.max(minX, preferredX));
+    group.center = group.x + group.width / 2;
+  });
+}
+
+function shiftGroups(groups, amount) {
+  groups.forEach((group) => {
+    group.x += amount;
+    group.center += amount;
+    group.preferredCenter += amount;
+  });
 }
 
 function preferredFamilyCenter(group, nodeMap, cardMidX) {
