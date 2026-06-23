@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Family Tree Maker</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=7">
   </head>
   <body>
     <div class="app-shell">
@@ -155,6 +155,12 @@
               <button class="icon-button" id="zoomResetBtn" title="Reset zoom" aria-label="Reset zoom">◇</button>
               <button class="icon-button" id="zoomInBtn" title="Zoom in" aria-label="Zoom in">+</button>
             </div>
+            <div class="toolbar-group">
+              <button class="icon-button" id="fullscreenBtn" title="Fullscreen chart" aria-label="Fullscreen chart">⛶</button>
+              <button class="icon-button" id="imageExportBtn" title="Save chart as image" aria-label="Save chart as image">▣</button>
+              <button class="icon-button" id="moveNodesBtn" title="Move nodes" aria-label="Move nodes" aria-pressed="false">✥</button>
+              <button class="icon-button" id="resetLayoutBtn" title="Reset moved nodes" aria-label="Reset moved nodes">↺</button>
+            </div>
             <div class="toolbar-group segmented" aria-label="Tree depth">
               <button data-depth="compact" class="active">Compact</button>
               <button data-depth="full">Full</button>
@@ -171,6 +177,6 @@
 
     <input id="fileInput" type="file" accept=".json,.ged,.gedcom,.txt" hidden>
     <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-    <script src="app.js"></script>
+    <script src="app.js?v=7"></script>
   </body>
 </html>

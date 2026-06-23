@@ -25,17 +25,38 @@ const DEFAULT_DATA = {
   selectedId: "root",
   focusId: "root",
   zoom: 1,
-  depth: "compact"
+  depth: "compact",
+  moveMode: false,
+  nodePositions: {},
+  viewport: { left: 0, top: 0 }
 };
 
 const state = loadState();
 const els = {};
+let currentLayout = null;
+
+const FAMILY_LINE_COLORS = [
+  "#2f7d62",
+  "#b65c71",
+  "#537ea6",
+  "#c28b32",
+  "#7b61b8",
+  "#d06f3c",
+  "#27838f",
+  "#8b6f47",
+  "#9a4f84",
+  "#5f7f3b"
+];
 
 document.addEventListener("DOMContentLoaded", () => {
   bindElements();
   bindEvents();
   render();
-  requestAnimationFrame(centerSelected);
+  requestAnimationFrame(() => {
+    if (!restoreViewportPosition()) {
+      centerSelected();
+    }
+  });
 });
 
 function bindElements() {
@@ -61,6 +82,10 @@ function bindElements() {
     "zoomOutBtn",
     "zoomResetBtn",
     "zoomInBtn",
+    "fullscreenBtn",
+    "imageExportBtn",
+    "moveNodesBtn",
+    "resetLayoutBtn",
     "treeViewport",
     "relationshipLines",
     "treeCanvas",
@@ -69,6 +94,7 @@ function bindElements() {
   ].forEach((id) => {
     els[id] = document.getElementById(id);
   });
+  els.treeArea = document.querySelector(".tree-area");
 }
 
 function bindEvents() {
@@ -103,6 +129,12 @@ function bindEvents() {
   els.zoomOutBtn.addEventListener("click", () => setZoom(state.zoom - 0.1));
   els.zoomInBtn.addEventListener("click", () => setZoom(state.zoom + 0.1));
   els.zoomResetBtn.addEventListener("click", () => setZoom(1));
+  els.fullscreenBtn.addEventListener("click", toggleFullscreen);
+  els.imageExportBtn.addEventListener("click", exportTreeImage);
+  els.moveNodesBtn.addEventListener("click", toggleMoveMode);
+  els.resetLayoutBtn.addEventListener("click", resetMovedNodes);
+  els.treeViewport.addEventListener("scroll", rememberViewportPosition, { passive: true });
+  document.addEventListener("fullscreenchange", updateFullscreenButton);
 
   document.querySelectorAll("[data-depth]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -131,7 +163,10 @@ function normalizeState(data) {
     selectedId: data.selectedId || data.focusId || Object.keys(data.people)[0],
     focusId: data.focusId || data.selectedId || Object.keys(data.people)[0],
     zoom: Number(data.zoom) || 1,
-    depth: data.depth === "full" ? "full" : "compact"
+    depth: data.depth === "full" ? "full" : "compact",
+    moveMode: Boolean(data.moveMode),
+    nodePositions: normalizeNodePositions(data.nodePositions),
+    viewport: normalizeViewport(data.viewport)
   };
 
   Object.values(data.people).forEach((person) => {
@@ -166,6 +201,7 @@ function normalizeState(data) {
 }
 
 function saveState() {
+  captureViewportPosition();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   els.saveStatus.textContent = "Saved locally";
 }
@@ -244,6 +280,7 @@ function renderTree() {
   }
 
   const layout = buildLayout();
+  currentLayout = layout;
   const bounds = layoutBounds(layout.nodes);
   const width = Math.max(1300, bounds.maxX + 280);
   const height = Math.max(900, bounds.maxY + 180);
@@ -257,9 +294,9 @@ function renderTree() {
   els.relationshipLines.style.transform = `scale(${state.zoom})`;
   els.relationshipLines.style.transformOrigin = "top left";
 
-  layout.links.forEach(drawParentLink);
-  layout.partnerLinks.forEach((link) => drawPartnerLink(link.from, link.to));
+  drawRelationshipLines(layout);
   layout.nodes.forEach(renderPersonCard);
+  updateMoveModeButton();
 }
 
 function renderEmptyState() {
@@ -306,9 +343,9 @@ function buildLayout() {
   const cardWidth = 178;
   const cardMidX = cardWidth / 2;
   const cardHeight = 84;
-  const levelGap = 175;
+  const levelGap = 250;
   const partnerGap = 18;
-  const groupGap = 120;
+  const groupGap = 150;
   const leftPad = 110;
   const startY = 90 + Math.abs(Math.min(...levelKeys, 0)) * levelGap;
 
@@ -348,6 +385,14 @@ function buildLayout() {
     node.x += globalOffset;
   });
 
+  nodes.forEach((node) => {
+    const position = state.nodePositions[node.id];
+    if (position) {
+      node.x = position.x;
+      node.y = position.y;
+    }
+  });
+
   const links = [];
   const partnerLinks = [];
   const linkedChildren = new Set();
@@ -356,13 +401,22 @@ function buildLayout() {
     if (visibleParents.length && !linkedChildren.has(node.id)) {
       const parentCenterX = visibleParents.reduce((sum, parent) => sum + parent.x + cardMidX, 0) / visibleParents.length;
       const parentBottomY = Math.max(...visibleParents.map((parent) => parent.y + cardHeight));
-      links.push({ fromX: parentCenterX, fromY: parentBottomY, to: node });
+      const familyKey = familyKeyForParents(visibleParents);
+      links.push({
+        fromX: parentCenterX,
+        fromY: parentBottomY,
+        parents: visibleParents,
+        to: node,
+        familyKey,
+        color: colorForFamilyKey(familyKey)
+      });
       linkedChildren.add(node.id);
     }
     node.person.partners.forEach((partnerId) => {
       const partner = nodeMap.get(partnerId);
       if (partner && node.id < partner.id) {
-        partnerLinks.push({ from: node, to: partner });
+        const familyKey = familyKeyForParents([node, partner]);
+        partnerLinks.push({ from: node, to: partner, familyKey, color: colorForFamilyKey(familyKey) });
       }
     });
   });
@@ -584,6 +638,7 @@ function renderPersonCard(node) {
   button.style.left = `${node.x}px`;
   button.style.top = `${node.y}px`;
   button.style.setProperty("--person-color", colorForPerson(person));
+  button.draggable = false;
   button.type = "button";
   button.innerHTML = `
     <span class="mini-avatar" style="background:${escapeHtml(colorForPerson(person))}">
@@ -594,13 +649,21 @@ function renderPersonCard(node) {
       <span>${escapeHtml(metaLine(person) || relationshipCount(person))}</span>
     </span>
   `;
-  button.addEventListener("click", () => selectPerson(person.id));
+  button.addEventListener("click", () => {
+    if (button.dataset.dragged === "true") {
+      button.dataset.dragged = "false";
+      return;
+    }
+    selectPerson(person.id);
+  });
   button.addEventListener("dblclick", () => {
     state.focusId = person.id;
     saveState();
     renderTree();
     centerSelected();
   });
+  button.addEventListener("pointerdown", (event) => startNodeDrag(event, button, node));
+  button.addEventListener("mousedown", (event) => startNodeDrag(event, button, node));
   els.treeCanvas.appendChild(button);
 }
 
@@ -638,21 +701,29 @@ function relationshipRow(label, relatedId, kind) {
 }
 
 function drawParentLink(link) {
-  const startX = link.fromX;
-  const startY = link.fromY;
+  const startX = link.parents?.length
+    ? link.parents.reduce((sum, parent) => sum + parent.x + 89, 0) / link.parents.length
+    : link.fromX;
+  const startY = link.parents?.length ? Math.max(...link.parents.map((parent) => parent.y + 84)) : link.fromY;
   const endX = link.to.x + 89;
   const endY = link.to.y;
   const midY = startY + (endY - startY) / 2;
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("d", `M ${startX} ${startY} C ${startX} ${midY}, ${endX} ${midY}, ${endX} ${endY}`);
   path.setAttribute("fill", "none");
-  path.setAttribute("stroke", "#8f8069");
+  path.setAttribute("stroke", link.color || "#8f8069");
   path.setAttribute("stroke-width", "2.5");
   path.setAttribute("stroke-linecap", "round");
   els.relationshipLines.appendChild(path);
 }
 
-function drawPartnerLink(from, to) {
+function drawRelationshipLines(layout) {
+  els.relationshipLines.innerHTML = "";
+  layout.links.forEach(drawParentLink);
+  layout.partnerLinks.forEach((link) => drawPartnerLink(link.from, link.to, link.color));
+}
+
+function drawPartnerLink(from, to, color = "#b65c71") {
   const cardWidth = 178;
   const cardMidY = 42;
   const left = from.x <= to.x ? from : to;
@@ -664,7 +735,7 @@ function drawPartnerLink(from, to) {
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("d", `M ${startX} ${startY} L ${endX} ${endY}`);
   path.setAttribute("fill", "none");
-  path.setAttribute("stroke", "#b65c71");
+  path.setAttribute("stroke", color);
   path.setAttribute("stroke-width", "3");
   path.setAttribute("stroke-linecap", "round");
   path.setAttribute("stroke-dasharray", "7 5");
@@ -942,6 +1013,71 @@ function uniqueIds(ids) {
   return [...new Set((ids || []).filter(Boolean))];
 }
 
+function familyKeyForParents(parents) {
+  return parents
+    .map((parent) => parent.id)
+    .sort()
+    .join("|");
+}
+
+function colorForFamilyKey(key) {
+  let hash = 0;
+  for (let index = 0; index < key.length; index += 1) {
+    hash = (hash * 31 + key.charCodeAt(index)) >>> 0;
+  }
+  return FAMILY_LINE_COLORS[hash % FAMILY_LINE_COLORS.length];
+}
+
+function normalizeNodePositions(positions) {
+  if (!positions || typeof positions !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(positions)
+      .map(([id, position]) => [
+        id,
+        {
+          x: Number(position?.x),
+          y: Number(position?.y)
+        }
+      ])
+      .filter(([, position]) => Number.isFinite(position.x) && Number.isFinite(position.y))
+  );
+}
+
+function normalizeViewport(viewport) {
+  const left = Number(viewport?.left);
+  const top = Number(viewport?.top);
+  return {
+    left: Number.isFinite(left) ? Math.max(0, left) : 0,
+    top: Number.isFinite(top) ? Math.max(0, top) : 0
+  };
+}
+
+function captureViewportPosition() {
+  if (!els.treeViewport) return;
+  state.viewport = {
+    left: Math.max(0, Math.round(els.treeViewport.scrollLeft)),
+    top: Math.max(0, Math.round(els.treeViewport.scrollTop))
+  };
+}
+
+function rememberViewportPosition() {
+  window.clearTimeout(rememberViewportPosition.timer);
+  rememberViewportPosition.timer = window.setTimeout(() => {
+    captureViewportPosition();
+    saveState();
+  }, 250);
+}
+
+function restoreViewportPosition() {
+  if (!state.viewport || (!state.viewport.left && !state.viewport.top)) return false;
+  els.treeViewport.scrollTo({
+    left: state.viewport.left,
+    top: state.viewport.top,
+    behavior: "auto"
+  });
+  return true;
+}
+
 function setActiveTab(name) {
   document.querySelectorAll(".tab").forEach((tab) => {
     const active = tab.dataset.tab === name;
@@ -998,6 +1134,98 @@ function setZoom(value) {
   renderTree();
 }
 
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    els.treeArea.requestFullscreen?.();
+    return;
+  }
+  document.exitFullscreen?.();
+}
+
+function updateFullscreenButton() {
+  const isFullscreen = document.fullscreenElement === els.treeArea;
+  els.fullscreenBtn.classList.toggle("active", isFullscreen);
+  els.fullscreenBtn.setAttribute("aria-label", isFullscreen ? "Exit fullscreen" : "Fullscreen chart");
+  els.fullscreenBtn.title = isFullscreen ? "Exit fullscreen" : "Fullscreen chart";
+}
+
+function toggleMoveMode() {
+  state.moveMode = !state.moveMode;
+  saveState();
+  updateMoveModeButton();
+}
+
+function updateMoveModeButton() {
+  els.moveNodesBtn.classList.toggle("active", state.moveMode);
+  els.moveNodesBtn.setAttribute("aria-pressed", String(state.moveMode));
+  els.treeViewport.classList.toggle("moving-enabled", state.moveMode);
+}
+
+function resetMovedNodes() {
+  if (!Object.keys(state.nodePositions).length) {
+    showToast("No moved nodes to reset.");
+    return;
+  }
+  const ok = window.confirm("Reset all manually moved nodes?");
+  if (!ok) return;
+  state.nodePositions = {};
+  saveState();
+  renderTree();
+  centerSelected();
+  showToast("Manual node positions reset.");
+}
+
+function startNodeDrag(event, card, node) {
+  if (!state.moveMode || (Number.isFinite(event.button) && event.button !== 0)) return;
+  if (card.classList.contains("dragging")) return;
+  event.preventDefault();
+  state.selectedId = node.id;
+  const startClientX = event.clientX;
+  const startClientY = event.clientY;
+  const startX = node.x;
+  const startY = node.y;
+  let moved = false;
+  const moveEventName = event.type === "mousedown" ? "mousemove" : "pointermove";
+  const upEventName = event.type === "mousedown" ? "mouseup" : "pointerup";
+  const cancelEventName = event.type === "mousedown" ? "mouseleave" : "pointercancel";
+
+  if (event.pointerId !== undefined) {
+    card.setPointerCapture(event.pointerId);
+  }
+  card.classList.add("dragging");
+
+  const onPointerMove = (moveEvent) => {
+    const nextX = Math.max(20, startX + (moveEvent.clientX - startClientX) / state.zoom);
+    const nextY = Math.max(20, startY + (moveEvent.clientY - startClientY) / state.zoom);
+    if (Math.abs(nextX - startX) > 2 || Math.abs(nextY - startY) > 2) {
+      moved = true;
+      card.dataset.dragged = "true";
+    }
+    node.x = Math.round(nextX);
+    node.y = Math.round(nextY);
+    state.nodePositions[node.id] = { x: node.x, y: node.y };
+    card.style.left = `${node.x}px`;
+    card.style.top = `${node.y}px`;
+    if (currentLayout) drawRelationshipLines(currentLayout);
+  };
+
+  const endDrag = () => {
+    card.classList.remove("dragging");
+    document.removeEventListener(moveEventName, onPointerMove);
+    document.removeEventListener(upEventName, endDrag);
+    document.removeEventListener(cancelEventName, endDrag);
+    if (moved) {
+      markDirty();
+      renderEditor();
+      renderRelationshipList();
+    }
+  };
+
+  document.addEventListener(moveEventName, onPointerMove);
+  document.addEventListener(upEventName, endDrag);
+  document.addEventListener(cancelEventName, endDrag);
+}
+
 function centerSelected() {
   const card = els.treeCanvas.querySelector(".person-card.selected");
   if (!card) return;
@@ -1016,6 +1244,7 @@ function newTree() {
 }
 
 function exportJson() {
+  captureViewportPosition();
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1023,6 +1252,184 @@ function exportJson() {
   a.download = `family-tree-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function exportTreeImage() {
+  const layout = currentLayout || buildLayout();
+  if (!layout.nodes.length) {
+    showToast("Add someone to the tree before saving an image.");
+    return;
+  }
+
+  const bounds = layoutBounds(layout.nodes);
+  const width = Math.ceil(Math.max(1300, bounds.maxX + 280));
+  const height = Math.ceil(Math.max(900, bounds.maxY + 180));
+  const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(width * scale);
+  canvas.height = Math.round(height * scale);
+  const ctx = canvas.getContext("2d");
+  ctx.scale(scale, scale);
+
+  drawImageBackground(ctx, width, height);
+  layout.links.forEach((link) => drawImageParentLink(ctx, link));
+  layout.partnerLinks.forEach((link) => drawImagePartnerLink(ctx, link));
+  layout.nodes.forEach((node) => drawImagePersonCard(ctx, node));
+
+  canvas.toBlob((blob) => {
+    if (!blob) {
+      showToast("Image export failed.");
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `family-tree-${new Date().toISOString().slice(0, 10)}.png`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("Saved chart image.");
+  }, "image/png");
+}
+
+function drawImageBackground(ctx, width, height) {
+  ctx.fillStyle = "#f3f6f3";
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = "rgba(80, 68, 45, 0.08)";
+  ctx.lineWidth = 1;
+  for (let x = 0; x <= width; x += 28) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+  }
+  for (let y = 0; y <= height; y += 28) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+}
+
+function drawImageParentLink(ctx, link) {
+  const startX = link.parents?.length
+    ? link.parents.reduce((sum, parent) => sum + parent.x + 89, 0) / link.parents.length
+    : link.fromX;
+  const startY = link.parents?.length ? Math.max(...link.parents.map((parent) => parent.y + 84)) : link.fromY;
+  const endX = link.to.x + 89;
+  const endY = link.to.y;
+  const midY = startY + (endY - startY) / 2;
+  ctx.save();
+  ctx.strokeStyle = link.color || "#8f8069";
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(startX, startY);
+  ctx.bezierCurveTo(startX, midY, endX, midY, endX, endY);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawImagePartnerLink(ctx, link) {
+  const cardWidth = 178;
+  const cardMidY = 42;
+  const left = link.from.x <= link.to.x ? link.from : link.to;
+  const right = link.from.x <= link.to.x ? link.to : link.from;
+  ctx.save();
+  ctx.strokeStyle = link.color || "#b65c71";
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.setLineDash([7, 5]);
+  ctx.beginPath();
+  ctx.moveTo(left.x + cardWidth, left.y + cardMidY);
+  ctx.lineTo(right.x, right.y + cardMidY);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawImagePersonCard(ctx, node) {
+  const person = node.person;
+  const x = node.x;
+  const y = node.y;
+  const width = 178;
+  const height = 84;
+  const color = colorForPerson(person);
+
+  ctx.save();
+  ctx.shadowColor = "rgba(48, 40, 28, 0.16)";
+  ctx.shadowBlur = 22;
+  ctx.shadowOffsetY = 8;
+  roundedRect(ctx, x, y, width, height, 8);
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+  ctx.shadowColor = "transparent";
+  ctx.lineWidth = person.id === state.selectedId ? 4 : 2;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+
+  ctx.fillStyle = color;
+  roundedRect(ctx, x, y, 7, height, 8);
+  ctx.fill();
+
+  roundedRect(ctx, x + 14, y + 21, 42, 42, 8);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "900 15px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(initials(person), x + 35, y + 42);
+
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#1f2823";
+  ctx.font = "800 14px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  drawWrappedText(ctx, displayName(person), x + 65, y + 18, 96, 17, 2);
+  ctx.fillStyle = "#65726c";
+  ctx.font = "12px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  drawWrappedText(ctx, metaLine(person) || relationshipCount(person), x + 65, y + 52, 96, 15, 1);
+  ctx.restore();
+}
+
+function roundedRect(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function drawWrappedText(ctx, text, x, y, maxWidth, lineHeight, maxLines) {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = "";
+  words.forEach((word) => {
+    const next = line ? `${line} ${word}` : word;
+    if (ctx.measureText(next).width <= maxWidth || !line) {
+      line = next;
+      return;
+    }
+    lines.push(line);
+    line = word;
+  });
+  if (line) lines.push(line);
+
+  lines.slice(0, maxLines).forEach((textLine, index) => {
+    let value = textLine;
+    if (index === maxLines - 1 && lines.length > maxLines) {
+      while (value.length > 1 && ctx.measureText(`${value}...`).width > maxWidth) {
+        value = value.slice(0, -1);
+      }
+      value = `${value}...`;
+    }
+    ctx.fillText(value, x, y + index * lineHeight);
+  });
 }
 
 async function importFile(event) {
